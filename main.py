@@ -1,57 +1,104 @@
 import cv2
-from deepface import DeepFace
 import os
+import numpy as np
+import pandas as pd
+from datetime import datetime
+from deepface import DeepFace
 
-print("Starting DeepFace Recognition...")
+KNOWN_FACES_DIR = "known_faces"
+ATTENDANCE_DIR = "attendance"
+THRESHOLD = 0.6
 
-known_image_path = "known_faces/akash.jpg"
+if not os.path.exists(ATTENDANCE_DIR):
+    os.makedirs(ATTENDANCE_DIR)
 
-if not os.path.exists(known_image_path):
-    print("ERROR: akash.jpg not found")
-    exit()
+print("Loading known faces...")
 
-cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+known_embeddings = []
+known_names = []
 
-if not cap.isOpened():
-    print("ERROR: Could not open webcam")
-    exit()
+for file in os.listdir(KNOWN_FACES_DIR):
+    if file.endswith(".jpg") or file.endswith(".png"):
+        path = os.path.join(KNOWN_FACES_DIR, file)
+        name = os.path.splitext(file)[0]
 
-print("Press Q to exit")
+        embedding = DeepFace.represent(
+            img_path=path,
+            model_name="Facenet",
+            enforce_detection=False
+        )[0]["embedding"]
+
+        known_embeddings.append(embedding)
+        known_names.append(name)
+
+print("Faces loaded successfully.")
+
+today_date = datetime.now().strftime("%Y-%m-%d")
+csv_file = os.path.join(ATTENDANCE_DIR, f"{today_date}.csv")
+
+if not os.path.exists(csv_file):
+    df = pd.DataFrame(columns=["Name", "Time"])
+    df.to_csv(csv_file, index=False)
+
+def mark_attendance(name):
+    df = pd.read_csv(csv_file)
+
+    if name not in df["Name"].values:
+        now = datetime.now().strftime("%H:%M:%S")
+        new_row = pd.DataFrame([[name, now]], columns=["Name", "Time"])
+        df = pd.concat([df, new_row], ignore_index=True)
+        df.to_csv(csv_file, index=False)
+        print(f"Attendance marked for {name}")
+
+cap = cv2.VideoCapture(0)
+
+print("Starting camera... Press Q to quit.")
 
 while True:
     ret, frame = cap.read()
     if not ret:
         break
 
-    label = "No Face"
-
     try:
-        result = DeepFace.verify(
-            frame,
-            known_image_path,
-            model_name="Facenet",
-            enforce_detection=False
-        )
+        results = DeepFace.extract_faces(frame, enforce_detection=False)
 
-        # Add confidence threshold check
-        if result["verified"] and result["distance"] < 0.6:
-            label = "Akash"
-        else:
-            label = "Unknown"
+        for result in results:
+            x, y, w, h = result["facial_area"].values()
+            face = frame[y:y+h, x:x+w]
+
+            embedding = DeepFace.represent(
+                img_path=face,
+                model_name="Facenet",
+                enforce_detection=False
+            )[0]["embedding"]
+
+            distances = [
+                np.linalg.norm(np.array(embedding) - np.array(known_embedding))
+                for known_embedding in known_embeddings
+            ]
+
+            min_distance = min(distances)
+            index = distances.index(min_distance)
+
+            if min_distance < THRESHOLD:
+                name = known_names[index]
+                label = name
+                mark_attendance(name)
+                color = (0, 255, 0)
+            else:
+                label = "Unknown"
+                color = (0, 0, 255)
+
+            cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
+            cv2.putText(frame, label, (x, y-10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
 
     except:
-        label = "No Face"
+        pass
 
-    # Draw label
-    cv2.putText(frame, label, (50, 50),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (0, 255, 0),
-                2)
+    cv2.imshow("Face Recognition Attendance", frame)
 
-    cv2.imshow("DeepFace Recognition", frame)
-
-    if cv2.waitKey(1) & 0xFF == ord('q'):
+    if cv2.waitKey(1) & 0xFF == ord("q"):
         break
 
 cap.release()
