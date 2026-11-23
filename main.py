@@ -7,7 +7,14 @@ from deepface import DeepFace
 
 KNOWN_FACES_DIR = "known_faces"
 ATTENDANCE_DIR = "attendance"
-THRESHOLD = 0.6
+# DeepFace's default threshold for FaceNet with L2-normalised Euclidean distance
+THRESHOLD = 0.80
+
+
+def normalize(embedding):
+    vector = np.array(embedding)
+    return vector / np.linalg.norm(vector)
+
 
 if not os.path.exists(ATTENDANCE_DIR):
     os.makedirs(ATTENDANCE_DIR)
@@ -28,8 +35,11 @@ for file in os.listdir(KNOWN_FACES_DIR):
             enforce_detection=False
         )[0]["embedding"]
 
-        known_embeddings.append(embedding)
+        known_embeddings.append(normalize(embedding))
         known_names.append(name)
+
+if not known_embeddings:
+    raise SystemExit(f"No .jpg or .png images found in {KNOWN_FACES_DIR}/")
 
 print("Faces loaded successfully.")
 
@@ -59,42 +69,50 @@ while True:
     if not ret:
         break
 
-    try:
-        results = DeepFace.extract_faces(frame, enforce_detection=False)
+    results = DeepFace.extract_faces(frame, enforce_detection=False)
+    frame_height, frame_width = frame.shape[:2]
 
-        for result in results:
-            x, y, w, h = result["facial_area"].values()
-            face = frame[y:y+h, x:x+w]
+    for result in results:
+        area = result["facial_area"]
+        x, y, w, h = area["x"], area["y"], area["w"], area["h"]
 
-            embedding = DeepFace.represent(
+        # When no face is found, DeepFace returns the whole frame with
+        # confidence 0 instead of raising, so skip that placeholder.
+        if result.get("confidence", 0) == 0 and (w, h) == (frame_width, frame_height):
+            continue
+
+        face = frame[y:y+h, x:x+w]
+
+        try:
+            embedding = normalize(DeepFace.represent(
                 img_path=face,
                 model_name="Facenet",
                 enforce_detection=False
-            )[0]["embedding"]
+            )[0]["embedding"])
+        except Exception as error:
+            print(f"Skipped a face: {error}")
+            continue
 
-            distances = [
-                np.linalg.norm(np.array(embedding) - np.array(known_embedding))
-                for known_embedding in known_embeddings
-            ]
+        distances = [
+            np.linalg.norm(embedding - known_embedding)
+            for known_embedding in known_embeddings
+        ]
 
-            min_distance = min(distances)
-            index = distances.index(min_distance)
+        min_distance = min(distances)
+        index = distances.index(min_distance)
 
-            if min_distance < THRESHOLD:
-                name = known_names[index]
-                label = name
-                mark_attendance(name)
-                color = (0, 255, 0)
-            else:
-                label = "Unknown"
-                color = (0, 0, 255)
+        if min_distance < THRESHOLD:
+            name = known_names[index]
+            label = name
+            mark_attendance(name)
+            color = (0, 255, 0)
+        else:
+            label = "Unknown"
+            color = (0, 0, 255)
 
-            cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
-            cv2.putText(frame, label, (x, y-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
-
-    except:
-        pass
+        cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
+        cv2.putText(frame, label, (x, y-10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
 
     cv2.imshow("Face Recognition Attendance", frame)
 

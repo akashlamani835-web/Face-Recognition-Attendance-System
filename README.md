@@ -18,8 +18,8 @@ A deep learning based real-time attendance system using FaceNet embeddings.
 
 ## How It Works
 The system extracts 128-dimensional embeddings from faces using a pretrained FaceNet model.
-It compares embeddings using Euclidean distance to identify individuals.
-If similarity is within threshold, attendance is recorded in a daily CSV file.
+It L2-normalises the embeddings and compares them using Euclidean distance to identify individuals.
+If the distance is below 0.80 (DeepFace's default threshold for FaceNet), attendance is recorded in a daily CSV file.
 
 ## Future Improvements
 - Database integration (MySQL)
